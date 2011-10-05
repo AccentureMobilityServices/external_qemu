@@ -36,7 +36,7 @@ ifeq ($(BUILD_DEBUG_EMULATOR),true)
 endif
 
 MY_CFLAGS += -DCONFIG_MEMCHECK
-
+MY_CFLAGS += -Ivendor/accenture/opengles2emulator/include
 MY_LDLIBS :=
 
 # this is needed to build the emulator on 64-bit Linux systems
@@ -191,6 +191,7 @@ HW_SOURCES := \
     usb-ohci.c \
     usb.c \
     watchdog.c \
+	goldfish_virtual_device.c \
 
 LOCAL_SRC_FILES += $(HW_SOURCES:%=hw/%)
 
@@ -641,6 +642,7 @@ CORE_MISC_SOURCES = vl-android.c \
                     android/avd/hw-config.c \
                     android/avd/info.c \
                     android/utils/ini.c \
+					sharedmemory_allocator.c \
 
 ifeq ($(HOST_ARCH),x86)
     CORE_MISC_SOURCES += i386-dis.c

@@ -1,4 +1,5 @@
 /* Copyright (C) 2007-2008 The Android Open Source Project
+** Copyright (C) 2011 Accenture Ltd
 **
 ** This software is licensed under the terms of the GNU General Public
 ** License version 2, as published by the Free Software Foundation, and
@@ -49,6 +50,7 @@ void goldfish_battery_display(void (* callback)(void *data, const char* string),
 void goldfish_mmc_init(uint32_t base, int id, BlockDriverState* bs);
 void *goldfish_switch_add(char *name, uint32_t (*writefn)(void *opaque, uint32_t state), void *writeopaque, int id);
 void goldfish_switch_set_state(void *opaque, uint32_t state);
+void goldfish_virtualDevice_init (uint32_t base, int id);
 
 // these do not add a device
 void trace_dev_init();

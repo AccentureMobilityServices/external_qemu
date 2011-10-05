@@ -1,4 +1,5 @@
 /* Copyright (C) 2007-2008 The Android Open Source Project
+** Copyright (C) 2011 Accenture Ltd
 **
 ** This software is licensed under the terms of the GNU General Public
 ** License version 2, as published by the Free Software Foundation, and
@@ -127,6 +128,8 @@ static void android_arm_init_(ram_addr_t ram_size,
     }
 
     goldfish_memlog_init(0xff006000);
+
+	goldfish_virtualDevice_init (0xff007000, 0);
 
     if (android_hw->hw_battery)
         goldfish_battery_init();

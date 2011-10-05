@@ -2,6 +2,7 @@
  *  virtual page mapping and translated block handling
  *
  *  Copyright (c) 2003 Fabrice Bellard
+ *  Copyright (c) 2011 Accenture Ltd	
  *
  * This library is free software; you can redistribute it and/or
  * modify it under the terms of the GNU Lesser General Public
@@ -45,6 +46,15 @@
 #ifdef CONFIG_MEMCHECK
 #include "memcheck/memcheck_api.h"
 #endif  // CONFIG_MEMCHECK
+
+#include "sharedmemory_allocator.h"
+#include "qemu_debug.h"
+//#define DEBUG 1
+#if DEBUG
+#  define  DBGPRINT(...) dprintn(__VA_ARGS__)
+#else
+#  define  DBGPRINT(...) ((void)0)
+#endif
 
 //#define DEBUG_TB_INVALIDATE
 //#define DEBUG_FLUSH
@@ -2460,9 +2470,13 @@ void qemu_unregister_coalesced_mmio(target_phys_addr_t addr, ram_addr_t size)
 
 ram_addr_t qemu_ram_alloc(ram_addr_t size)
 {
+	struct hostSharedMemoryStruct theSharedMemoryStruct;
     RAMBlock *new_block;
 
+	DBGPRINT ("[INFO (%s)] : Allocating device memory, size: %ld\n", __FUNCTION__, size);
+
     size = TARGET_PAGE_ALIGN(size);
+
     new_block = qemu_malloc(sizeof(*new_block));
 
 #if defined(TARGET_S390X) && defined(CONFIG_KVM)
@@ -2470,7 +2484,19 @@ ram_addr_t qemu_ram_alloc(ram_addr_t size)
     new_block->host = mmap((void*)0x1000000, size, PROT_EXEC|PROT_READ|PROT_WRITE,
                            MAP_SHARED | MAP_ANONYMOUS, -1, 0);
 #else
-    new_block->host = qemu_vmalloc(size);
+//    	new_block->host = qemu_vmalloc(size);
+
+		DBGPRINT ("    (more) : Creating shared object...\n");
+		theSharedMemoryStruct.sharedMemoryObjectName = "/qemu_device_ram1";
+		theSharedMemoryStruct.sharedMemorySegmentKey = 0x1339;									/* For shared segments */
+		theSharedMemoryStruct.size = size;														/* Already page aligned */
+		theSharedMemoryStruct.requiredAddress = NULL;											/* NULL = find me some memory, don't try to match */
+
+		sharedMemory_allocator_create_sharedmemory_file (&theSharedMemoryStruct);
+		sharedMemory_allocator_map_sharedmemory_file (&theSharedMemoryStruct);
+
+    	new_block->host = theSharedMemoryStruct.actualAddress;
+
 #endif
 #ifdef MADV_MERGEABLE
     madvise(new_block->host, size, MADV_MERGEABLE);
