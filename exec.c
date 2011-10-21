@@ -47,7 +47,7 @@
 #include "memcheck/memcheck_api.h"
 #endif  // CONFIG_MEMCHECK
 
-#include "sharedmemory_allocator.h"
+#include "gles2emulator_utils.h"
 #include "qemu_debug.h"
 //#define DEBUG 1
 #if DEBUG
@@ -2487,13 +2487,13 @@ ram_addr_t qemu_ram_alloc(ram_addr_t size)
 //    	new_block->host = qemu_vmalloc(size);
 
 		DBGPRINT ("    (more) : Creating shared object...\n");
-		theSharedMemoryStruct.sharedMemoryObjectName = "/qemu_device_ram1";
+		theSharedMemoryStruct.sharedMemoryObjectName = "qemu_device_ram1";
 		theSharedMemoryStruct.sharedMemorySegmentKey = 0x1339;									/* For shared segments */
 		theSharedMemoryStruct.size = size;														/* Already page aligned */
 		theSharedMemoryStruct.requiredAddress = NULL;											/* NULL = find me some memory, don't try to match */
 
-		sharedMemory_allocator_create_sharedmemory_file (&theSharedMemoryStruct);
-		sharedMemory_allocator_map_sharedmemory_file (&theSharedMemoryStruct);
+		gles2emulator_utils_create_sharedmemory_file (&theSharedMemoryStruct);
+		gles2emulator_utils_map_sharedmemory_file (&theSharedMemoryStruct);
 
     	new_block->host = theSharedMemoryStruct.actualAddress;
 

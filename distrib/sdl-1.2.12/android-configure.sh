@@ -134,7 +134,7 @@ case "$OS" in
         if [ -d $TIGER_SDK ] ; then
             TIGER_OPTS="-isysroot $TIGER_SDK -mmacosx-version-min=10.4"
             BUILD_CFLAGS="$BUILD_CFLAGS $TIGER_OPTS"
-            BUILD_LDFLAGS="$BUILD_LDFLAGS $TIGER_OPTS -Wl,-syslibroot,$(TIGER_SDK)"
+            BUILD_LDFLAGS="$BUILD_LDFLAGS $TIGER_OPTS -Wl,-syslibroot,$TIGER_SDK"
             echo "Using OS X 10.4 SDK to generate Tiger-compatible binaries."
         else
             echo "Warning: the generated binaries will not be compatible with Tiger."

@@ -23,7 +23,7 @@
 #include "goldfish_device.h"
 #include "qemu_debug.h"
 #include "android/globals.h"
-#include "sharedmemory_allocator.h"
+#include "gles2emulator_utils.h"
 
 #include <signal.h>
 #include <time.h>
@@ -75,6 +75,8 @@ struct goldfish_virtualDevice_device_parameters {
 	struct goldfish_virtualDevice_buff input_buffer_2[1];
 	struct hostSharedMemoryStruct theSharedMemoryStruct;
 	struct hostSharedMemoryStruct theResetSemaphoreStruct;
+	struct hostIPCStruct theInputIPCStruct;
+	struct hostIPCStruct theOutputIPCStruct;
 
     uint8*		hostDataBufferAddress;
     uint32_t	hostDataBufferOffset;
@@ -84,7 +86,7 @@ struct goldfish_virtualDevice_device_parameters {
 };
 
 /* Used to reference the device for testing. */
-struct goldfish_virtualDevice_device_parameters *deviceParametersForTest;
+struct goldfish_virtualDevice_device_parameters *deviceParametersGlobal;
 
 static void
 goldfish_virtualDevice_output_filler (void *opaque);
@@ -209,11 +211,15 @@ copy_data_to_host_buffer (char *sourceData, char *whereToPutIt, int bytes_availa
 {
 	int bytes_done;
 
+
 	bytes_done = 0;
 
 	while (bytes_available_to_write) {
 		whereToPutIt[theDevice->hostDataBufferOffset++] = *(sourceData++);
-		if (theDevice->hostDataBufferOffset >= theDevice->hostDataBufferSize) theDevice->hostDataBufferOffset = 0;
+		if (theDevice->hostDataBufferOffset >= theDevice->hostDataBufferSize)
+		{
+			theDevice->hostDataBufferOffset = 0;
+		}
 		bytes_available_to_write--;
 		bytes_done++;
 	}
@@ -550,6 +556,8 @@ goldfish_virtualDevice_output_filler (void *opaque)
 {
     struct goldfish_virtualDevice_device_parameters *theDevice = opaque;
     int new_status = 0;
+    uint32_t buffer_exhausted_signal = 1;
+    long resultCode;
 
 
     /* Wait/loop until we have something to write and either buffer has something.*/
@@ -589,7 +597,25 @@ goldfish_virtualDevice_output_filler (void *opaque)
         }
     }
 
-	theDevice->hostDataBufferFreeBytes = theDevice->hostDataBufferSize;		// At the moment not doing host buffer locking, so resetting this.
+	/* Check if we have exhausted host buffer. */
+	if (theDevice->hostDataBufferFreeBytes <= 0)
+	{
+//		theDevice->theOutputIPCStruct.theMessage = (char *)&buffer_exhausted_signal;
+//		theDevice->theOutputIPCStruct.theMessageLength = 4;
+//		theDevice->theOutputIPCStruct.thePriority = 0;
+
+		theDevice->theOutputIPCStruct.theMessage = "Buffeh!";
+		theDevice->theOutputIPCStruct.theMessageLength = strlen(theDevice->theOutputIPCStruct.theMessage) + 1;
+		theDevice->theOutputIPCStruct.thePriority = 0;
+		gles2emulator_utils_ipc_send_message (&theDevice->theOutputIPCStruct);
+
+//		gles2emulator_utils_ipc_send_message (&theDevice->theOutputIPCStruct);
+//		if (resultCode = -1) DBGPRINT ("[INFO (%s)] : ------------------------------ BLOM!.\n", __FUNCTION__);
+//		resultCode = gles2emulator_utils_ipc_receive_message_with_timeout (&theDevice->theInputIPCStruct, 2.5);
+//		if (resultCode = -1) DBGPRINT ("[INFO (%s)] : ------------------------------ Timeout on waiting for buffer exhausted confirmation.\n", __FUNCTION__);
+
+		theDevice->hostDataBufferFreeBytes = theDevice->hostDataBufferSize;		// At the moment not doing host buffer locking, so resetting this.
+	}
 
     if (new_status && new_status != theDevice->int_status) {
         theDevice->int_status |= new_status;
@@ -665,6 +691,56 @@ static CPUWriteMemoryFunc
 };
 
 
+static void
+goldfish_virtualDevice_signal_function (int signo, siginfo_t *theSigVal, void *ignored)
+{
+struct mq_attr theQueueAttributes;
+uint32_t theCommand;
+int theSize;
+int numMessages, i;
+struct goldfish_virtualDevice_device_parameters *theDevice = (struct goldfish_virtualDevice_device_parameters *) theSigVal->si_value.sival_ptr;
+
+
+
+	if (gles2emulator_utils_ipc_get_attributes (&theDevice->theInputIPCStruct) == -1) DBGPRINT("    (more) : Cannot get queue attributes.\n");
+
+//	if (mq_getattr(theDevice->theInputIPCStruct.theMessageQueue, &theQueueAttributes) == -1) DBGPRINT("    (more) : Cannot get queue attributes.\n");
+
+	numMessages = theDevice->theInputIPCStruct.theQueueAttributes.mq_curmsgs;
+	DBGPRINT ("[INFO (%s)] : <<<<<<<<<!!!!<<<<<<<<<  Received signal from message queue, amount: %d.  >>>>>>>>>>>>>>>>>>>>>>\n\n\n", __FUNCTION__, numMessages);
+	
+	for (i = 0; i < numMessages; i++)
+	{
+		theSize = gles2emulator_utils_ipc_receive_message (&theDevice->theInputIPCStruct);
+//		theSize = mq_receive(theDevice->theInputIPCStruct.theMessageQueue, theDevice->theInputIPCStruct.theMessageBuffer, theDevice->theInputIPCStruct.theMessageBufferSize, NULL);
+//	if (theSize == -1) DBGPRINT("    (more) : Error in mq_receive.\n");
+
+		DBGPRINT("    (more) : Read %ld bytes from Message queue: %s\n", (long) theSize, theDevice->theInputIPCStruct.theMessageBuffer);
+
+
+	theCommand = *(uint32_t *)theDevice->theInputIPCStruct.theMessageBuffer;
+	if (theCommand == 0x4703F322)
+	{
+
+		theCommand = *(uint32_t *)(theDevice->theInputIPCStruct.theMessageBuffer + 16);
+		switch (theCommand)
+		{
+			// Cheapo test before adding in command structure.
+			case 8:
+				DBGPRINT("    (more) : Host buffer pointer reset requested!\n");
+				deviceParametersGlobal->hostDataBufferOffset = 0;
+		}
+	}
+
+	}
+
+	/* Re-register signal request. */	
+	mq_notify(theDevice->theInputIPCStruct.theMessageQueue, &theDevice->theInputIPCStruct.theSignalEvent);
+
+//	gles2emulator_utils_ipc_set_notifier_function (&theDevice->theInputIPCStruct, theDevice);
+}
+
+
 /* Initialise the device. Called here when the board is booted. */
 void
 goldfish_virtualDevice_init (uint32_t base, int id)
@@ -677,10 +753,10 @@ goldfish_virtualDevice_init (uint32_t base, int id)
 
 	DBGPRINT ("[INFO (%s)] : Initialising virtual device...\n", __FUNCTION__);
 
-	theSharedMemoryStruct.sharedMemoryObjectName = "/qemu_virtualdevice1_params";
+	theSharedMemoryStruct.sharedMemoryObjectName = "qemu_vd1_params";
 	theSharedMemoryStruct.size = sizeof (struct goldfish_virtualDevice_device_parameters);
-	sharedMemory_allocator_create_sharedmemory_file (&theSharedMemoryStruct);
-	sharedMemory_allocator_map_sharedmemory_file (&theSharedMemoryStruct);
+	gles2emulator_utils_create_sharedmemory_file (&theSharedMemoryStruct);
+	gles2emulator_utils_map_sharedmemory_file (&theSharedMemoryStruct);
 
 	if (theSharedMemoryStruct.actualAddress != 0) {
 
@@ -696,12 +772,12 @@ goldfish_virtualDevice_init (uint32_t base, int id)
 
 		theDevice->totalBuffersLength = theDevice->eachBufferSize * theDevice->numberOfBuffers;
 
-		theDevice->theHostDataBuffer.sharedMemoryObjectName = "/qemu_gles2emulator_inputBuffer";
+		theDevice->theHostDataBuffer.sharedMemoryObjectName = "qemu_vd1_inputBuffer";
 		theDevice->theHostDataBuffer.sharedMemorySegmentKey = 0x1339;							/* For shared segments, would allow others to loas shared memory using key */
 		theDevice->theHostDataBuffer.size = HostBufferSize;
 		theDevice->theHostDataBuffer.requiredAddress = NULL;								/* NULL = find me some memory, don't try to match */
-		sharedMemory_allocator_create_sharedmemory_file (&theDevice->theHostDataBuffer);
-		sharedMemory_allocator_map_sharedmemory_file (&theDevice->theHostDataBuffer);
+		gles2emulator_utils_create_sharedmemory_file (&theDevice->theHostDataBuffer);
+		gles2emulator_utils_map_sharedmemory_file (&theDevice->theHostDataBuffer);
 
 		theDevice->hostDataBufferAddress = theDevice->theHostDataBuffer.actualAddress;
 		theDevice->hostDataBufferOffset = 0;
@@ -715,16 +791,54 @@ goldfish_virtualDevice_init (uint32_t base, int id)
 
 		DBGPRINT ("[INFO (%s)] : Host buffers addr: 0x%x\n", __FUNCTION__, theDevice->output_buffer_1->hostDataAddress);
 
-		theDevice->theSharedMemoryStruct.sharedMemorySemaphoreName = "/qemu_virtualdevice1_semaphore";
-		sharedMemory_allocator_create_sharedmemory_semaphore (&theDevice->theSharedMemoryStruct);
-		theDevice->theResetSemaphoreStruct.sharedMemorySemaphoreName = "/qemu_virtualdevice1_systemReset_semaphore";
-		sharedMemory_allocator_create_sharedmemory_semaphore (&theDevice->theResetSemaphoreStruct);
+		theDevice->theSharedMemoryStruct.sharedMemorySemaphoreName = "qemu_vd1_semaphore";
+		gles2emulator_utils_create_sharedmemory_semaphore (&theDevice->theSharedMemoryStruct);
+		theDevice->theResetSemaphoreStruct.sharedMemorySemaphoreName = "qemu_vd1_systemReset_sem";
+		gles2emulator_utils_create_sharedmemory_semaphore (&theDevice->theResetSemaphoreStruct);
+
+
+		theDevice->theInputIPCStruct.theMessageBufferSize = 8192;
+		theDevice->theInputIPCStruct.maxMessages = 32;
+		theDevice->theOutputIPCStruct.theMessageBufferSize = 8192;
+		theDevice->theOutputIPCStruct.maxMessages = 32;
+		
+		DBGPRINT ("    (more) : Creating input IPC message pipe...  ");
+		theDevice->theInputIPCStruct.theMessageBuffer = malloc(theDevice->theInputIPCStruct.theMessageBufferSize);
+		theDevice->theInputIPCStruct.theMessageQueueName = "/gles2emulator_msgQInput";
+		theDevice->theInputIPCStruct.theFileMode = O_CREAT | O_RDWR;
+		gles2emulator_utils_ipc_create (&theDevice->theInputIPCStruct);
+		DBGPRINT ("OK\n");
+
+//		DBGPRINT ("    (more) : Creating output IPC message pipe...  ");
+//		theDevice->theOutputIPCStruct.theMessageBuffer = malloc(theDevice->thePutputIPCStruct.theMessageBufferSize);
+//		theDevice->theOutputIPCStruct.theMessageQueueName = "/gles2emulator_msgQOutput";
+//		theDevice->theOutputIPCStruct.theFileMode = (O_CREAT|O_WRONLY);
+//		gles2emulator_utils_ipc_create (&theDevice->theOutputIPCStruct, 32, 1024);
+//		DBGPRINT ("OK\n");
+
+		if (!gles2emulator_utils_ipc_get_attributes (&theDevice->theInputIPCStruct))
+		{
+			i = theDevice->theInputIPCStruct.theQueueAttributes.mq_curmsgs;
+			for (j = 0; j < i; j++)
+			{
+				gles2emulator_utils_ipc_receive_message (&theDevice->theInputIPCStruct);
+				DBGPRINT("Clearing message cobwebs: %s\n", theDevice->theInputIPCStruct.theMessageBuffer);
+			}
+		}
+
+		theDevice->theInputIPCStruct.theThreadPointer = goldfish_virtualDevice_signal_function;
+		gles2emulator_utils_ipc_set_notifier_function (&theDevice->theInputIPCStruct, theDevice);
+
+//		theDevice->theOutputIPCStruct.theMessage = "Test!";
+//		theDevice->theOutputIPCStruct.theMessageLength = strlen(theDevice->theOutputIPCStruct.theMessage) + 1;
+//		theDevice->theOutputIPCStruct.thePriority = 0;
+//		gles2emulator_utils_ipc_send_message (&theDevice->theOutputIPCStruct);
 
 		if (pthread_mutex_init (&theDevice->parametersMutex, NULL)) {
 			DBGPRINT ("    (WARN) : Could not initialise mutex!  Device not installed.\n");
-			sharedMemory_allocator_remove_sharedmemory_semaphore (&theDevice->theSharedMemoryStruct);
-			sharedMemory_allocator_unmap_sharedmemory (&theDevice->theSharedMemoryStruct);
-			sharedMemory_allocator_close_sharedmemory_file (&theDevice->theSharedMemoryStruct);
+			gles2emulator_utils_remove_sharedmemory_semaphore (&theDevice->theSharedMemoryStruct);
+			gles2emulator_utils_unmap_sharedmemory (&theDevice->theSharedMemoryStruct);
+			gles2emulator_utils_close_sharedmemory_file (&theDevice->theSharedMemoryStruct);
 			return;
 		}
 
@@ -732,7 +846,7 @@ goldfish_virtualDevice_init (uint32_t base, int id)
 
 		/* Register machine to save the state from Qemu. */
 		register_savevm ("virtualdevice1_state", 0, VIRTUALDEVICE_STATE_SAVE_VERSION, virtualDevice_state_save, virtualDevice_state_load, theDevice);
-		deviceParametersForTest = theDevice;
+		deviceParametersGlobal = theDevice;
 		DBGPRINT ("    (more) : Done, all ok!\n");
 	} else {
 		DBGPRINT ("    (WARN) : Couldn't allocate memory!  Device not installed.\n");

@@ -75,7 +75,7 @@ ifeq ($(HOST_OS),darwin)
             $(error Aborting the build.)
         endif
         MY_CFLAGS += -isysroot $(LEOPARD_SDK) -mmacosx-version-min=10.5 -DMACOSX_DEPLOYMENT_TARGET=10.5
-        MY_LDLIBS += -isysroot $(LEOPARD_SDK) -Wl,-syslibroot,$(LEOPARD_SDK) -mmacosx-version-min=10.5
+        MY_LDLIBS += -isysroot $(LEOPARD_SDK) -Wl,-syslibroot,$(LEOPARD_SDK) -mmacosx-version-min=10.5 -read_only_relocs suppress
     endif
 endif
 
@@ -642,7 +642,7 @@ CORE_MISC_SOURCES = vl-android.c \
                     android/avd/hw-config.c \
                     android/avd/info.c \
                     android/utils/ini.c \
-					sharedmemory_allocator.c \
+		    gles2emulator_utils.c \
 
 ifeq ($(HOST_ARCH),x86)
     CORE_MISC_SOURCES += i386-dis.c
