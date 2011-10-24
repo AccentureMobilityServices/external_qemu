@@ -96,7 +96,7 @@ goldfish_virtualDevice_output_filler (void *opaque);
 static void
 goldfish_virtualDevice_buff_init (struct goldfish_virtualDevice_buff *theBuffer, uint32_t bufferNumber, uint32_t theBufferOffset, uint32_t theBufferSize, uint8 *theBufferAddress)
 {
-	theBuffer->bufferTag = 'BUFx';
+	theBuffer->bufferTag = (int)"BUFx";
 	*(char *)(&theBuffer->bufferTag) = '0' + bufferNumber;		/* Test tag to identify it in memory. */
     theBuffer->bufferSize = theBufferSize;
     theBuffer->bufferOffset = theBufferOffset;
@@ -474,12 +474,6 @@ goldfish_virtualDevice_writecommand_requested (void *opaque, target_phys_addr_t 
 				DBGPRINT ("    (more) : Command = SET_OUTPUT_BUFFER_2_ADDRESS : 0x%x\n", offset);
 				DBGPRINT ("    (more) : Host address : 0x%x\n", qemu_get_ram_ptr (val));
 				goldfish_virtualDevice_buff_set_guest_address (theDevice->output_buffer_2, val);
-				break;
-
-		case VIRTUALDEVICE_IOCTL_GRALLOC_ALLOCATED_REGION_INFO:
-				/* Guest cpu can return physical offset or we can use qemu_ram_addr_from_host . */
-				DBGPRINT ("    (more) : Command = VIRTUALDEVICE_IOCTL_GRALLOC_ALLOCATED_REGION_INFO : 0x%x\n", offset);
-				DBGPRINT ("    (more) : Gralloc region address : 0x%x\n", val);
 				break;
 
 		case VIRTUALDEVICE_IOCTL_SYSTEM_RESET:
