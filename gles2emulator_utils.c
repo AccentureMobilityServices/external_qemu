@@ -3,7 +3,7 @@
  *
  *  Memory allocator and shared mapping functions.
  *
- *  Copyright (c) 2011 Accenture Ltd	
+ *  Copyright (c) 2011 Accenture Ltd
  *
  * This library is free software; you can redistribute it and/or
  * modify it under the terms of the GNU Lesser General Public
@@ -45,7 +45,7 @@ gles2emulator_utils_create_sharedmemory_file (struct hostSharedMemoryStruct *the
 
 	DBGPRINT ("[INFO (%s)] : Creating shared memory object descriptor '%s'.\n", __FUNCTION__, theSharedMemoryStruct->sharedMemoryObjectName);
 
-	theSharedMemoryStruct->fileDescriptor = shm_open (theSharedMemoryStruct->sharedMemoryObjectName, (O_CREAT | O_TRUNC | O_RDWR), (ALLPERMS));
+	theSharedMemoryStruct->fileDescriptor = shm_open (theSharedMemoryStruct->sharedMemoryObjectName, (O_CREAT | O_RDWR), (ALLPERMS));
 	if (theSharedMemoryStruct->fileDescriptor < 0) {
 		DBGPRINT ("    (ERROR) : Failed to create shared memory descriptor.\n");
 		theSharedMemoryStruct->actualAddress = 0;
@@ -177,7 +177,7 @@ gles2emulator_utils_create_sharedmemory_segment (struct hostSharedMemoryStruct *
 		theSharedMemoryStruct->actualAddress = 0;
 		return;
     	}
-	
+
 	theSharedMemoryStruct->actualAddress = shmat (theSharedMemoryStruct->sharedMemoryID, NULL, 0);
 
 	if ((int)theSharedMemoryStruct->actualAddress != -1) {
@@ -187,137 +187,10 @@ gles2emulator_utils_create_sharedmemory_segment (struct hostSharedMemoryStruct *
 		theSharedMemoryStruct->actualAddress = 0;
 		return;
 	}
-	
+
 
 	/* Test */
 //	sprintf (theSharedMemoryStruct->actualAddress, "DEADBEEFDEADBEEFDEADBEEF\n");
 }
 
-
-
-mqd_t
-gles2emulator_utils_ipc_open (struct hostIPCStruct *theIPCStruct)
-{
-	theIPCStruct->theMessageQueue = mq_open (theIPCStruct->theMessageQueueName, (O_RDWR));
-	if (theIPCStruct->theMessageQueue > 0)
-	{
-		gles2emulator_utils_ipc_get_attributes(theIPCStruct);
-		theIPCStruct->theMessageBufferSize = theIPCStruct->theQueueAttributes.mq_msgsize;
-	} else {
-		DBGPRINT ("Could not open message queue.\n");
-	}
-
-	return theIPCStruct->theMessageQueue;
-}
-
-mqd_t
-gles2emulator_utils_ipc_create (struct hostIPCStruct *theIPCStruct)
-{
-	theIPCStruct->theQueueAttributes.mq_maxmsg = theIPCStruct->maxMessages;
-	theIPCStruct->theQueueAttributes.mq_msgsize = theIPCStruct->theMessageBufferSize;	
-	theIPCStruct->theQueueAttributes.mq_flags = O_NONBLOCK;
-	theIPCStruct->theMessageQueue = mq_open (theIPCStruct->theMessageQueueName, theIPCStruct->theFileMode, S_IRWXU | S_IRWXG, NULL);
-	if (theIPCStruct->theMessageQueue < 0)
-	{
-		DBGPRINT ("Could not create message queue.\n");
-	}
-
-	return theIPCStruct->theMessageQueue;
-}
-
-mqd_t
-gles2emulator_utils_ipc_close (struct hostIPCStruct *theIPCStruct)
-{
-	return mq_close (theIPCStruct->theMessageQueue);
-}
-
-mqd_t
-gles2emulator_utils_ipc_unlink (struct hostIPCStruct *theIPCStruct)
-{
-	return mq_unlink (theIPCStruct->theMessageQueueName);
-}
-
-mqd_t
-gles2emulator_utils_ipc_receive_message (struct hostIPCStruct *theIPCStruct)
-{
-	theIPCStruct->bytes_received = mq_receive (theIPCStruct->theMessageQueue, theIPCStruct->theMessageBuffer, theIPCStruct->theMessageBufferSize, &theIPCStruct->thePriority);
-	return theIPCStruct->bytes_received;
-}
-
-mqd_t
-gles2emulator_utils_ipc_receive_message_with_timeout (struct hostIPCStruct *theIPCStruct, float seconds)
-{
-struct timespec theWait;
-
-
-	theWait.tv_sec = (int)floor(seconds);
-	theWait.tv_nsec = (int)(1e9 * (seconds - theWait.tv_sec));
-
-	theIPCStruct->bytes_received = mq_timedreceive (theIPCStruct->theMessageQueue, theIPCStruct->theMessageBuffer, theIPCStruct->theMessageBufferSize, &theIPCStruct->thePriority, &theWait);
-	return theIPCStruct->bytes_received;
-}
-
-mqd_t
-gles2emulator_utils_ipc_send_message (struct hostIPCStruct *theIPCStruct)
-{
-	return mq_send (theIPCStruct->theMessageQueue, theIPCStruct->theMessage, theIPCStruct->theMessageLength, theIPCStruct->thePriority);
-}
-
-mqd_t
-gles2emulator_utils_ipc_send_message_with_timeout (struct hostIPCStruct *theIPCStruct, float seconds)
-{
-struct timespec theWait;
-
-
-	theWait.tv_sec = (int)floor(seconds);
-	theWait.tv_nsec = (int)(1e9 * (seconds - theWait.tv_sec));
-
-	return mq_timedsend (theIPCStruct->theMessageQueue, theIPCStruct->theMessage, theIPCStruct->theMessageLength, theIPCStruct->thePriority, &theWait);
-}
-
-mqd_t
-gles2emulator_utils_ipc_get_attributes (struct hostIPCStruct *theIPCStruct)
-{
-	return mq_getattr(theIPCStruct->theMessageQueue, &theIPCStruct->theQueueAttributes);
-}
-
-mqd_t
-gles2emulator_utils_ipc_messages_in_queue (struct hostIPCStruct *theIPCStruct)
-{
-	return mq_getattr(theIPCStruct->theMessageQueue, &theIPCStruct->theQueueAttributes);
-}
-
-mqd_t
-gles2emulator_utils_ipc_set_blocking_mode (struct hostIPCStruct *theIPCStruct)
-{
-mqd_t theReturnVal;
-
-
-	theReturnVal = mq_getattr(theIPCStruct->theMessageQueue, &theIPCStruct->theQueueAttributes);
-	
-	if (!theReturnVal)
-	{
-		DBGPRINT ("Error in obtaining queue attributes!\n");
-		return theReturnVal;
-	}
-
-//	theIPCStruct->isBlocking ? theIPCStruct->theQueueAttributes.mq_flags = 0 : theIPCStruct->theQueueAttributes.mq_flags = O_NONBLOCK;
-	return mq_setattr(theIPCStruct->theMessageQueue, &theIPCStruct->theQueueAttributes, NULL);
-}
-
-mqd_t
-gles2emulator_utils_ipc_set_notifier_function (struct hostIPCStruct *theIPCStruct, void *theDataPointerToPass)
-{
-//	theIPCStruct->theSignalThread.sigev_notify = SIGEV_THREAD;
-	sigemptyset (&theIPCStruct->theSignalAction.sa_mask);
-	theIPCStruct->theSignalAction.sa_flags = SA_SIGINFO;
-	theIPCStruct->theSignalAction.sa_sigaction = theIPCStruct->theThreadPointer;
-   	sigaction (SIGRTMAX, &theIPCStruct->theSignalAction, NULL);
-	theIPCStruct->theSignalEvent.sigev_notify = SIGEV_SIGNAL;
-	theIPCStruct->theSignalEvent.sigev_signo = SIGRTMAX;
-	theIPCStruct->theSignalEvent.sigev_notify_function = theIPCStruct->theThreadPointer;
-//	theIPCStruct->theSignalEvent.sigev_notify_attributes = NULL;
-	theIPCStruct->theSignalEvent.sigev_value.sival_ptr = theDataPointerToPass;
-	return mq_notify(theIPCStruct->theMessageQueue, &theIPCStruct->theSignalEvent);
-}
 

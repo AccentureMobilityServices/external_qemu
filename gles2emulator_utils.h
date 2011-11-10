@@ -3,7 +3,7 @@
  *
  *  Memory allocator and shared mapping functions.
  *
- *  Copyright (c) 2011 Accenture Ltd	
+ *  Copyright (c) 2011 Accenture Ltd
  *
  * This library is free software; you can redistribute it and/or
  * modify it under the terms of the GNU Lesser General Public
@@ -32,7 +32,6 @@
 #include <sys/stat.h>        /* For mode constants */
 #include <fcntl.h>           /* For O_* constants */
 #include <stdio.h>
-#include <mqueue.h>
 #include <time.h>
 #include <math.h>
 #include <time.h>
@@ -51,14 +50,13 @@ struct hostSharedMemoryStruct {
 	void *requiredAddress;
 	void *actualAddress;
 };
-
+/*
 struct hostIPCStruct {
+	pthread_mutex_t	IPCMutex;
 	char *theMessageQueueName;
 	int maxMessages;
 	int  theMessageBufferSize;
 	char *theMessageBuffer;
-	mqd_t theMessageQueue;
-	struct mq_attr theQueueAttributes;
 	long bytes_received;
 	float waitTime;
 	int isBlocking;
@@ -70,7 +68,7 @@ struct hostIPCStruct {
 	struct sigaction theSignalAction;
 	struct sigevent theSignalEvent;
 };
-
+*/
 void gles2emulator_utils_create_sharedmemory_file (struct hostSharedMemoryStruct *theSharedMemoryStruct);
 void gles2emulator_utils_close_sharedmemory_file (struct hostSharedMemoryStruct *theSharedMemoryStruct);
 void gles2emulator_utils_map_sharedmemory_file (struct hostSharedMemoryStruct *theSharedMemoryStruct);
@@ -78,20 +76,4 @@ void gles2emulator_utils_unmap_sharedmemory (struct hostSharedMemoryStruct *theS
 void gles2emulator_utils_create_sharedmemory_semaphore (struct hostSharedMemoryStruct *theSharedMemoryStruct);
 void gles2emulator_utils_remove_sharedmemory_semaphore (struct hostSharedMemoryStruct *theSharedMemoryStruct);
 void gles2emulator_utils_create_sharedmemory_segment (struct hostSharedMemoryStruct *theSharedMemoryStruct);
-
-/* IPC message queue support */
-mqd_t gles2emulator_utils_ipc_open (struct hostIPCStruct *theIPCStruct);
-mqd_t gles2emulator_utils_ipc_close (struct hostIPCStruct *theIPCStruct);
-mqd_t gles2emulator_utils_ipc_unlink (struct hostIPCStruct *theIPCStruct);
-mqd_t gles2emulator_utils_ipc_create (struct hostIPCStruct *theIPCStruct);
-mqd_t gles2emulator_utils_ipc_receive_message (struct hostIPCStruct *theIPCStruct);
-mqd_t gles2emulator_utils_ipc_receive_message_with_timeout (struct hostIPCStruct *theIPCStruct, float seconds);
-mqd_t gles2emulator_utils_ipc_send_message (struct hostIPCStruct *theIPCStruct);
-mqd_t gles2emulator_utils_ipc_send_message_with_timeout (struct hostIPCStruct *theIPCStruct, float seconds);
-mqd_t gles2emulator_utils_ipc_get_attributes (struct hostIPCStruct *theIPCStruct);
-mqd_t gles2emulator_utils_ipc_messages_in_queue (struct hostIPCStruct *theIPCStruct);
-mqd_t gles2emulator_utils_ipc_set_blocking_mode (struct hostIPCStruct *theIPCStruct);
-mqd_t gles2emulator_utils_ipc_set_notifier_function (struct hostIPCStruct *theIPCStruct, void *theDataPointerToPass);
-
-#endif /* GLES2EMULATOR_UTILS_H */
-
+#endif

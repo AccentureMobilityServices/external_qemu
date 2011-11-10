@@ -3,7 +3,7 @@
  *
  *  Android virtual Qemu device.
  *
- *  Copyright (c) 2011 Accenture Ltd	
+ *  Copyright (c) 2011 Accenture Ltd
  *
  * This library is free software; you can redistribute it and/or
  * modify it under the terms of the GNU Lesser General Public
@@ -31,6 +31,16 @@
 #include <pthread.h>
 #include "gles2_emulator_constants.h"
 
+#include <sys/types.h>
+#include <sys/socket.h>
+#include <sys/un.h>
+#include <string.h>
+#include <stdlib.h>
+#include <stdio.h>
+
+#define ADDRESS     "/tmp/glproxy-socket"  /* addr to connect */
+
+
 //#define DEBUG 1
 
 #if DEBUG
@@ -38,6 +48,9 @@
 #else
 #  define  DBGPRINT(...) ((void)0)
 #endif
+
+#define  DBGPRINT2(...) dprintn(__VA_ARGS__)
+
 
 extern void  dprintn (const char*  fmt, ...);
 
@@ -60,6 +73,8 @@ struct goldfish_virtualDevice_device_parameters {
     struct goldfish_device dev;
     uint32_t	int_status;
     uint32_t	int_enable;
+    uint32_t	region_write_done;
+	uint32_t	sync_value;
 	uint32_t	numberOfBuffers;
 	uint8		*hostBaseStructureAddress;
 	uint32_t	eachBufferSize;
@@ -74,29 +89,97 @@ struct goldfish_virtualDevice_device_parameters {
 	struct goldfish_virtualDevice_buff input_buffer_1[1];
 	struct goldfish_virtualDevice_buff input_buffer_2[1];
 	struct hostSharedMemoryStruct theSharedMemoryStruct;
-	struct hostSharedMemoryStruct theResetSemaphoreStruct;
-	struct hostIPCStruct theInputIPCStruct;
-	struct hostIPCStruct theOutputIPCStruct;
 
-    uint8*		hostDataBufferAddress;
-    uint32_t	hostDataBufferOffset;
-    uint32_t	hostDataBufferSize;
-    uint32_t	hostDataBufferFreeBytes;
-	struct 		hostSharedMemoryStruct theHostDataBuffer;
+	int			socketfd;
+	int 		connected;
+    struct sockaddr_un saun, fsaun;
 };
+
+void goldfish_virtualDevice_createSocket(struct goldfish_virtualDevice_device_parameters* params)
+{
+    char c;
+    int fromlen;
+	int len;
+	int flags;
+
+    /*
+     * Get a socket to work with.  This socket will
+     * be in the UNIX domain, and will be a
+     * stream socket.
+     */
+	DBGPRINT("create socket start\n");	
+    if ((params->socketfd = socket(AF_UNIX, SOCK_STREAM, 0)) < 0) {
+		return;
+    }
+
+	DBGPRINT("create socket %d\n", params->socketfd);	
+    /*
+     * Create the address we will be binding to.
+     */
+    params->saun.sun_family = AF_UNIX;
+    strcpy(params->saun.sun_path, ADDRESS);
+}
+
+int goldfish_virtualDevice_connectSocket(struct goldfish_virtualDevice_device_parameters* params)
+{
+	int len = sizeof(params->saun.sun_family) + strlen(params->saun.sun_path)+1;
+	int res = params->connected;
+	if (res<0) {
+	    while ((res = connect(params->socketfd, &params->saun, len)==-1) && (errno==EINTR)){}
+		if (res == -1) perror("connection fail");
+		params->connected = res;
+    }
+	return res;	
+}
+
+int goldfish_virtualDevice_writeSocket(struct goldfish_virtualDevice_device_parameters* params, struct goldfish_virtualDevice_buff *theBuffer)
+{
+	int bytesWritten=0;
+	int bytesToWrite = theBuffer->transferSize;
+
+    goldfish_virtualDevice_connectSocket(params);
+	char* srcAddress = theBuffer->hostDataAddress;
+	if (params->connected  >= 0) {
+		while (bytesToWrite > 0) {	
+			bytesWritten = write(params->socketfd,srcAddress, bytesToWrite); 
+			if (bytesWritten == -1) {
+					if (errno == EINTR || errno == EAGAIN) 
+						continue;
+					else {
+						params->connected = -1;
+						close(params->socketfd);
+						// try to reopen socket 
+						DBGPRINT("SocketError - trying to reopen socket\n");
+						goldfish_virtualDevice_createSocket(params);
+						goldfish_virtualDevice_connectSocket(params);
+						continue;
+
+					}
+			}
+			srcAddress += bytesWritten;
+			bytesToWrite -= bytesWritten;
+		} 
+		DBGPRINT("bytes written %d of %d\n", bytesWritten, theBuffer->transferSize);
+		if (bytesWritten == -1) {
+			perror("socket-write-problem");
+		}
+	}
+	return bytesWritten;
+}
+
+
+
+
+
 
 /* Used to reference the device for testing. */
 struct goldfish_virtualDevice_device_parameters *deviceParametersGlobal;
-
-static void
-goldfish_virtualDevice_output_filler (void *opaque);
-
 
 /* Initialise the buffer. */
 static void
 goldfish_virtualDevice_buff_init (struct goldfish_virtualDevice_buff *theBuffer, uint32_t bufferNumber, uint32_t theBufferOffset, uint32_t theBufferSize, uint8 *theBufferAddress)
 {
-	theBuffer->bufferTag = (int)"BUFx";
+	theBuffer->bufferTag = "BUFx";
 	*(char *)(&theBuffer->bufferTag) = '0' + bufferNumber;		/* Test tag to identify it in memory. */
     theBuffer->bufferSize = theBufferSize;
     theBuffer->bufferOffset = theBufferOffset;
@@ -203,53 +286,6 @@ write_data_to_host_test (char *whereToPutIt, int bytes_available_to_write)
 	}
 	return bytes_done;
 }
-
-
-/* Test to write data to host. */
-static int
-copy_data_to_host_buffer (char *sourceData, char *whereToPutIt, int bytes_available_to_write, struct goldfish_virtualDevice_device_parameters *theDevice)
-{
-	int bytes_done;
-
-
-	bytes_done = 0;
-
-	while (bytes_available_to_write) {
-		whereToPutIt[theDevice->hostDataBufferOffset++] = *(sourceData++);
-		if (theDevice->hostDataBufferOffset >= theDevice->hostDataBufferSize)
-		{
-			theDevice->hostDataBufferOffset = 0;
-		}
-		bytes_available_to_write--;
-		bytes_done++;
-	}
-	return bytes_done;
-}
-
-
-/* Send data from the guest buffer to the host - when guest module does a 'write' operation.  The data is already present in the buffer which we can access directly.
-*  There is no need to send it anywhere, but the placeholder is here in case the data needs to be relayed elsewhere - the 'write_data_to_host_test' example highlights
-*  what can be done with the buffer.
-*  Basically, this is the data 'consumer'.
-*/
-static int
-goldfish_virtualDevice_buff_send_to_host (struct goldfish_virtualDevice_buff *theBuffer, int bytes_free, struct goldfish_virtualDevice_device_parameters *theDevice)
-{
-    int  bytes_processed, bytes_to_write = theBuffer->transferSize;
-
-
-    DBGPRINT ( "[INFO (%s)] : Size = %d\n", __FUNCTION__, bytes_to_write );
-
-    if (bytes_to_write > bytes_free)
-        bytes_to_write = bytes_free;
-
-    bytes_processed = copy_data_to_host_buffer (theBuffer->hostDataAddress + theBuffer->bufferOffset, theDevice->hostDataBufferAddress, bytes_to_write, theDevice);
-
-    theBuffer->bufferOffset += bytes_processed;
-    theBuffer->transferSize -= bytes_processed;
-    return bytes_processed;
-}
-
 
 /* Test to read data from host (which gets sent to the guest). */
 static int
@@ -401,8 +437,9 @@ static uint32_t
 goldfish_virtualDevice_readcommand_requested (void *opaque, target_phys_addr_t offset)
 {
     uint32_t ret;
+	int bytesRead;
     struct goldfish_virtualDevice_device_parameters *theDevice = opaque;
- 
+
 	DBGPRINT ("[INFO (%s)] : Command %d.\n", __FUNCTION__, offset);
 
     switch (offset) {
@@ -427,6 +464,24 @@ goldfish_virtualDevice_readcommand_requested (void *opaque, target_phys_addr_t o
 			goldfish_virtualDevice_buff_write (theDevice->input_buffer_2);
 			return theDevice->input_buffer_2_available_count;
 
+		case VIRTUALDEVICE_HOST_COMMAND_REGION_WRITE_DONE:
+			DBGPRINT ("    (more) : Command = VIRTUALDEVICE_HOST_COMMAND_REGION_WRITE_DONE : 0x%x\n", theDevice->region_write_done);
+			bytesRead = read(theDevice->socketfd, &ret, sizeof(uint32_t));
+			while (bytesRead== -1 && (errno == EINTR || errno ==EAGAIN)) {
+				usleep(1000);
+				bytesRead = read(theDevice->socketfd, &ret, sizeof(uint32_t));
+			}
+			if (bytesRead == -1) {
+				close(theDevice->socketfd);
+				theDevice->socketfd = -1;
+				theDevice->connected = -1;
+				goldfish_virtualDevice_createSocket(theDevice); // prepare for reopening
+				perror("read");
+			}
+			DBGPRINT ("     host read bytes %d\n", bytesRead);
+			DBGPRINT ("     host return value 0x%08x\n", ret);
+			return ret;
+
 		default:
 //			cpu_abort (cpu_single_env, "%s: Bad command: %x\n", __FUNCTION__, offset);     //will shut down qemu if gets a bad command if enabled
 			DBGPRINT ("    (more) : Bad command: %x\n", offset);
@@ -442,7 +497,6 @@ goldfish_virtualDevice_writecommand_requested (void *opaque, target_phys_addr_t 
     struct goldfish_virtualDevice_device_parameters *theDevice = opaque;
 	target_phys_addr_t length;
 	void *theMemory;
-	int semaphore_value;
 
 	DBGPRINT ("[INFO (%s)] : Pointer: 0x%x - Command val: 0x%x - data: 0x%x.\n", __FUNCTION__, opaque, offset, val);
 
@@ -476,41 +530,16 @@ goldfish_virtualDevice_writecommand_requested (void *opaque, target_phys_addr_t 
 				goldfish_virtualDevice_buff_set_guest_address (theDevice->output_buffer_2, val);
 				break;
 
-		case VIRTUALDEVICE_IOCTL_SYSTEM_RESET:
-				DBGPRINT ("    (more) : Command = VIRTUALDEVICE_IOCTL_SYSTEM_RESET : 0x%x\n", offset);
-				goldfish_virtualDevice_output_filler (theDevice);		/* Send this buffer over to the host buffer */
-				sem_post (theDevice->theResetSemaphoreStruct.semaphore);  /* Signal to the host that a system reset has been called. */
-				/* Wait until host clears the semaphore */				
-				enable_virtualDevice (theDevice, 0);					/* Reset the buffers */
-				theDevice->hostDataBufferOffset = 0;
-				break;
-
-		case VIRTUALDEVICE_IOCTL_SIGNAL_BUFFER_SYNC:
-				/* Guest cpu can return physical offset or we can use qemu_ram_addr_from_host . */
-//				DBGPRINT ("    (more) : Command = VIRTUALDEVICE_IOCTL_SIGNAL_SYNC : 0x%x\n", offset);
-//				DBGPRINT ("    (more) : Sync value : 0x%x\n", val);
-				pthread_mutex_lock (&theDevice->parametersMutex);
-				theDevice->signalType = VIRTUALDEVICE_IOCTL_SIGNAL_BUFFER_SYNC;
-				theDevice->signalValue = val;
-				pthread_mutex_unlock (&theDevice->parametersMutex);
-				goldfish_virtualDevice_output_filler (theDevice);		/* Send this buffer over to the host buffer */
-				sem_post (theDevice->theSharedMemoryStruct.semaphore);
-				break;
-
 		/* Signalled when guest module has an output buffer available so we can write to it. */
         case VIRTUALDEVICE_OUTPUT_BUFFER_1_AVAILABLE:
 				DBGPRINT ("    (more) : Command = VIRTUALDEVICE_OUTPUT_BUFFER_1_AVAILABLE : 0x%x  Len: %d\n", offset, val);
 	            if (theDevice->current_output_buffer == 0) theDevice->current_output_buffer = 1;
 				goldfish_virtualDevice_buff_set_length (theDevice->output_buffer_1, val);
 				goldfish_virtualDevice_buff_read (theDevice->output_buffer_1);
-				theDevice->int_status &= ~VIRTUALDEVICE_INT_OUTPUT_BUFFER_1_EMPTY;
-				goldfish_virtualDevice_output_filler (theDevice);		/* Send this buffer over to the host buffer */
-				/* Signal to host this buffer is available with data, theDevice->signalValue holds number of bytes available. */
-				pthread_mutex_lock (&theDevice->parametersMutex);
-				theDevice->signalType = VIRTUALDEVICE_OUTPUT_BUFFER_1_AVAILABLE;
-				theDevice->signalValue = val;
-				pthread_mutex_unlock (&theDevice->parametersMutex);
-//				sem_post (theDevice->theSharedMemoryStruct.semaphore);
+				goldfish_virtualDevice_writeSocket(theDevice, theDevice->output_buffer_1);
+				
+                //theDevice->int_status |= VIRTUALDEVICE_INT_OUTPUT_BUFFER_1_EMPTY;
+        		//goldfish_device_set_irq (&theDevice->dev, 0, (theDevice->int_status & theDevice->int_enable));
             	break;
 
         case VIRTUALDEVICE_OUTPUT_BUFFER_2_AVAILABLE:
@@ -518,14 +547,9 @@ goldfish_virtualDevice_writecommand_requested (void *opaque, target_phys_addr_t 
          	  	if (theDevice->current_output_buffer == 0) theDevice->current_output_buffer = 2;
 				goldfish_virtualDevice_buff_set_length (theDevice->output_buffer_2, val);
 				goldfish_virtualDevice_buff_read (theDevice->output_buffer_2);
-				theDevice->int_status &= ~VIRTUALDEVICE_INT_OUTPUT_BUFFER_2_EMPTY;
-				goldfish_virtualDevice_output_filler (theDevice);		/* Send this buffer over to the host buffer */
-				/* Signal to host this buffer is available with data, theDevice->signalValue holds number of bytes available. */
-				pthread_mutex_lock (&theDevice->parametersMutex);
-				theDevice->signalType = VIRTUALDEVICE_OUTPUT_BUFFER_2_AVAILABLE;
-				theDevice->signalValue = val;
-				pthread_mutex_unlock (&theDevice->parametersMutex);
-//				sem_post (theDevice->theSharedMemoryStruct.semaphore);
+				goldfish_virtualDevice_writeSocket(theDevice, theDevice->output_buffer_2);
+                theDevice->int_status |= VIRTUALDEVICE_INT_OUTPUT_BUFFER_2_EMPTY;
+        		goldfish_device_set_irq (&theDevice->dev, 0, (theDevice->int_status & theDevice->int_enable));
           		 break;
 
 		/* Signalled when guest module wants to start writing to this device. */
@@ -544,130 +568,6 @@ goldfish_virtualDevice_writecommand_requested (void *opaque, target_phys_addr_t 
 }
 
 
-/*  Output buffer handler. */
-static void
-goldfish_virtualDevice_output_filler (void *opaque)
-{
-    struct goldfish_virtualDevice_device_parameters *theDevice = opaque;
-    int new_status = 0;
-    uint32_t buffer_exhausted_signal = 1;
-    long resultCode;
-
-
-    /* Wait/loop until we have something to write and either buffer has something.*/
-    while (theDevice->hostDataBufferFreeBytes && theDevice->current_output_buffer) {
-
-        /* Write data in buffer 1 if it is the current one. */
-        while (free && theDevice->current_output_buffer == 1) {
-            int  written = goldfish_virtualDevice_buff_send_to_host (theDevice->output_buffer_1, theDevice->hostDataBufferFreeBytes, theDevice);
-            if (written) {
-				DBGPRINT ("[INFO (%s)] : Sent %d bytes to host buffer_1\n", __FUNCTION__, written);
-                theDevice->hostDataBufferFreeBytes -= written;
-
-				/* Swap buffer if we are done with it. */
-                if (goldfish_virtualDevice_buff_length (theDevice->output_buffer_1) == 0) {
-                    new_status |= VIRTUALDEVICE_INT_OUTPUT_BUFFER_1_EMPTY;
-                    theDevice->current_output_buffer = (goldfish_virtualDevice_buff_length (theDevice->output_buffer_2) ? 2 : 0);
-                }
-            } else {
-                break;
-            }
-        }
-
-        /* Write data in buffer 2 if current. */
-        while (theDevice->hostDataBufferFreeBytes && theDevice->current_output_buffer == 2) {
-            int  written = goldfish_virtualDevice_buff_send_to_host (theDevice->output_buffer_2, theDevice->hostDataBufferFreeBytes, theDevice);
-            if (written) {
-				DBGPRINT ("[INFO (%s)] : Sent %d bytes to host buffer_2\n", __FUNCTION__, written);
-                theDevice->hostDataBufferFreeBytes -= written;
-
-                if (goldfish_virtualDevice_buff_length (theDevice->output_buffer_2) == 0) {
-                    new_status |= VIRTUALDEVICE_INT_OUTPUT_BUFFER_2_EMPTY;
-                    theDevice->current_output_buffer = (goldfish_virtualDevice_buff_length (theDevice->output_buffer_1) ? 1 : 0);
-                }
-            } else {
-                break;
-            }
-        }
-    }
-
-	/* Check if we have exhausted host buffer. */
-	if (theDevice->hostDataBufferFreeBytes <= 0)
-	{
-//		theDevice->theOutputIPCStruct.theMessage = (char *)&buffer_exhausted_signal;
-//		theDevice->theOutputIPCStruct.theMessageLength = 4;
-//		theDevice->theOutputIPCStruct.thePriority = 0;
-
-		theDevice->theOutputIPCStruct.theMessage = "Buffeh!";
-		theDevice->theOutputIPCStruct.theMessageLength = strlen(theDevice->theOutputIPCStruct.theMessage) + 1;
-		theDevice->theOutputIPCStruct.thePriority = 0;
-		gles2emulator_utils_ipc_send_message (&theDevice->theOutputIPCStruct);
-
-//		gles2emulator_utils_ipc_send_message (&theDevice->theOutputIPCStruct);
-//		if (resultCode = -1) DBGPRINT ("[INFO (%s)] : ------------------------------ BLOM!.\n", __FUNCTION__);
-//		resultCode = gles2emulator_utils_ipc_receive_message_with_timeout (&theDevice->theInputIPCStruct, 2.5);
-//		if (resultCode = -1) DBGPRINT ("[INFO (%s)] : ------------------------------ Timeout on waiting for buffer exhausted confirmation.\n", __FUNCTION__);
-
-		theDevice->hostDataBufferFreeBytes = theDevice->hostDataBufferSize;		// At the moment not doing host buffer locking, so resetting this.
-	}
-
-    if (new_status && new_status != theDevice->int_status) {
-        theDevice->int_status |= new_status;
-        goldfish_device_set_irq (&theDevice->dev, 0, (theDevice->int_status & theDevice->int_enable));
-    }
-}
-
-
-/* Input buffer handler. */
-static void
-goldfish_virtualDevice_input_filler (void *opaque, int bytes_available)
-{
-    struct goldfish_virtualDevice_device_parameters *theDevice = opaque;
-    int new_status = 0;
-
-
-    if (goldfish_virtualDevice_buff_available (theDevice->input_buffer_1) != 0 )
-	{
-		while ((bytes_available > 0)  && (theDevice->current_input_buffer == 1)) {
-			int  read = goldfish_virtualDevice_buff_receive_from_host (theDevice->input_buffer_1, bytes_available, theDevice);
-			if (read == 0)
-				break;
-			bytes_available -= read;
-
-			if (goldfish_virtualDevice_buff_available (theDevice->input_buffer_1) == 0) {
-				DBGPRINT ("[INFO (%s)] : Input buffer 1 is full and available with %d bytes ready.\n", __FUNCTION__, goldfish_virtualDevice_buff_length (theDevice->input_buffer_1));
-			   	new_status |= VIRTUALDEVICE_INT_INPUT_BUFFER_1_FULL;
-				theDevice->current_output_buffer = (goldfish_virtualDevice_buff_length (theDevice->input_buffer_2 ) ? 2 : 0);
-				break;
-			}
-		}
-
-    } else if (goldfish_virtualDevice_buff_available (theDevice->input_buffer_2) != 0 ) {
-
-		while ((bytes_available > 0)  && (theDevice->current_input_buffer == 2)) {
-		    int  read = goldfish_virtualDevice_buff_receive_from_host (theDevice->input_buffer_2, bytes_available, theDevice);
-		    if (read == 0)
-		        break;
-		    bytes_available -= read;
-
-		    if (goldfish_virtualDevice_buff_available (theDevice->input_buffer_2) == 0) {
-				DBGPRINT ("[INFO (%s)] : Input buffer 2 is full and available with %d bytes ready.\n", __FUNCTION__, goldfish_virtualDevice_buff_length (theDevice->input_buffer_2));
-		     	new_status |= VIRTUALDEVICE_INT_INPUT_BUFFER_2_FULL;
-				theDevice->current_output_buffer = (goldfish_virtualDevice_buff_length (theDevice->input_buffer_1 ) ? 1 : 0);
-		        break;
-        	}
-		}
-    } else {
-		return;
-	}
-
-    if (new_status && new_status != theDevice->int_status) {
-        theDevice->int_status |= new_status;
-        goldfish_device_set_irq (&theDevice->dev, 0, (theDevice->int_status & theDevice->int_enable));
-    }
-}
-
-
 /* Registered fucntions to read/write from memory. */
 static CPUReadMemoryFunc
 	*goldfish_virtualDevice_readfn[] = {
@@ -683,56 +583,6 @@ static CPUWriteMemoryFunc
 	goldfish_virtualDevice_writecommand_requested,
 	goldfish_virtualDevice_writecommand_requested
 };
-
-
-static void
-goldfish_virtualDevice_signal_function (int signo, siginfo_t *theSigVal, void *ignored)
-{
-struct mq_attr theQueueAttributes;
-uint32_t theCommand;
-int theSize;
-int numMessages, i;
-struct goldfish_virtualDevice_device_parameters *theDevice = (struct goldfish_virtualDevice_device_parameters *) theSigVal->si_value.sival_ptr;
-
-
-
-	if (gles2emulator_utils_ipc_get_attributes (&theDevice->theInputIPCStruct) == -1) DBGPRINT("    (more) : Cannot get queue attributes.\n");
-
-//	if (mq_getattr(theDevice->theInputIPCStruct.theMessageQueue, &theQueueAttributes) == -1) DBGPRINT("    (more) : Cannot get queue attributes.\n");
-
-	numMessages = theDevice->theInputIPCStruct.theQueueAttributes.mq_curmsgs;
-	DBGPRINT ("[INFO (%s)] : <<<<<<<<<!!!!<<<<<<<<<  Received signal from message queue, amount: %d.  >>>>>>>>>>>>>>>>>>>>>>\n\n\n", __FUNCTION__, numMessages);
-	
-	for (i = 0; i < numMessages; i++)
-	{
-		theSize = gles2emulator_utils_ipc_receive_message (&theDevice->theInputIPCStruct);
-//		theSize = mq_receive(theDevice->theInputIPCStruct.theMessageQueue, theDevice->theInputIPCStruct.theMessageBuffer, theDevice->theInputIPCStruct.theMessageBufferSize, NULL);
-//	if (theSize == -1) DBGPRINT("    (more) : Error in mq_receive.\n");
-
-		DBGPRINT("    (more) : Read %ld bytes from Message queue: %s\n", (long) theSize, theDevice->theInputIPCStruct.theMessageBuffer);
-
-
-	theCommand = *(uint32_t *)theDevice->theInputIPCStruct.theMessageBuffer;
-	if (theCommand == 0x4703F322)
-	{
-
-		theCommand = *(uint32_t *)(theDevice->theInputIPCStruct.theMessageBuffer + 16);
-		switch (theCommand)
-		{
-			// Cheapo test before adding in command structure.
-			case 8:
-				DBGPRINT("    (more) : Host buffer pointer reset requested!\n");
-				deviceParametersGlobal->hostDataBufferOffset = 0;
-		}
-	}
-
-	}
-
-	/* Re-register signal request. */	
-	mq_notify(theDevice->theInputIPCStruct.theMessageQueue, &theDevice->theInputIPCStruct.theSignalEvent);
-
-//	gles2emulator_utils_ipc_set_notifier_function (&theDevice->theInputIPCStruct, theDevice);
-}
 
 
 /* Initialise the device. Called here when the board is booted. */
@@ -761,22 +611,14 @@ goldfish_virtualDevice_init (uint32_t base, int id)
 		theDevice->dev.base = base;
 		theDevice->dev.size = 0x1000;
 		theDevice->dev.irq_count = 1;
-		theDevice->eachBufferSize = CommandBufferSize;					
-		theDevice->numberOfBuffers = NumberCommandBuffers * 2;	// *2 required because there are both Input and Output buffers		
+		theDevice->eachBufferSize = CommandBufferSize;
+		theDevice->numberOfBuffers = NumberCommandBuffers * 2;	// *2 required because there are both Input and Output buffers
 
 		theDevice->totalBuffersLength = theDevice->eachBufferSize * theDevice->numberOfBuffers;
 
-		theDevice->theHostDataBuffer.sharedMemoryObjectName = "qemu_vd1_inputBuffer";
-		theDevice->theHostDataBuffer.sharedMemorySegmentKey = 0x1339;							/* For shared segments, would allow others to loas shared memory using key */
-		theDevice->theHostDataBuffer.size = HostBufferSize;
-		theDevice->theHostDataBuffer.requiredAddress = NULL;								/* NULL = find me some memory, don't try to match */
-		gles2emulator_utils_create_sharedmemory_file (&theDevice->theHostDataBuffer);
-		gles2emulator_utils_map_sharedmemory_file (&theDevice->theHostDataBuffer);
 
-		theDevice->hostDataBufferAddress = theDevice->theHostDataBuffer.actualAddress;
-		theDevice->hostDataBufferOffset = 0;
-		theDevice->hostDataBufferSize = theDevice->theHostDataBuffer.size;
-		theDevice->hostDataBufferFreeBytes = theDevice->hostDataBufferSize;
+		goldfish_virtualDevice_createSocket(theDevice);
+		theDevice->connected = -1;
 
 		goldfish_virtualDevice_buff_init (theDevice->output_buffer_1, 1, 0, 0, 0);
 		goldfish_virtualDevice_buff_init (theDevice->output_buffer_2, 1, 0, 0, 0);
@@ -785,52 +627,8 @@ goldfish_virtualDevice_init (uint32_t base, int id)
 
 		DBGPRINT ("[INFO (%s)] : Host buffers addr: 0x%x\n", __FUNCTION__, theDevice->output_buffer_1->hostDataAddress);
 
-		theDevice->theSharedMemoryStruct.sharedMemorySemaphoreName = "qemu_vd1_semaphore";
-		gles2emulator_utils_create_sharedmemory_semaphore (&theDevice->theSharedMemoryStruct);
-		theDevice->theResetSemaphoreStruct.sharedMemorySemaphoreName = "qemu_vd1_systemReset_sem";
-		gles2emulator_utils_create_sharedmemory_semaphore (&theDevice->theResetSemaphoreStruct);
-
-
-		theDevice->theInputIPCStruct.theMessageBufferSize = 8192;
-		theDevice->theInputIPCStruct.maxMessages = 32;
-		theDevice->theOutputIPCStruct.theMessageBufferSize = 8192;
-		theDevice->theOutputIPCStruct.maxMessages = 32;
-		
-		DBGPRINT ("    (more) : Creating input IPC message pipe...  ");
-		theDevice->theInputIPCStruct.theMessageBuffer = malloc(theDevice->theInputIPCStruct.theMessageBufferSize);
-		theDevice->theInputIPCStruct.theMessageQueueName = "/gles2emulator_msgQInput";
-		theDevice->theInputIPCStruct.theFileMode = O_CREAT | O_RDWR;
-		gles2emulator_utils_ipc_create (&theDevice->theInputIPCStruct);
-		DBGPRINT ("OK\n");
-
-//		DBGPRINT ("    (more) : Creating output IPC message pipe...  ");
-//		theDevice->theOutputIPCStruct.theMessageBuffer = malloc(theDevice->thePutputIPCStruct.theMessageBufferSize);
-//		theDevice->theOutputIPCStruct.theMessageQueueName = "/gles2emulator_msgQOutput";
-//		theDevice->theOutputIPCStruct.theFileMode = (O_CREAT|O_WRONLY);
-//		gles2emulator_utils_ipc_create (&theDevice->theOutputIPCStruct, 32, 1024);
-//		DBGPRINT ("OK\n");
-
-		if (!gles2emulator_utils_ipc_get_attributes (&theDevice->theInputIPCStruct))
-		{
-			i = theDevice->theInputIPCStruct.theQueueAttributes.mq_curmsgs;
-			for (j = 0; j < i; j++)
-			{
-				gles2emulator_utils_ipc_receive_message (&theDevice->theInputIPCStruct);
-				DBGPRINT("Clearing message cobwebs: %s\n", theDevice->theInputIPCStruct.theMessageBuffer);
-			}
-		}
-
-		theDevice->theInputIPCStruct.theThreadPointer = goldfish_virtualDevice_signal_function;
-		gles2emulator_utils_ipc_set_notifier_function (&theDevice->theInputIPCStruct, theDevice);
-
-//		theDevice->theOutputIPCStruct.theMessage = "Test!";
-//		theDevice->theOutputIPCStruct.theMessageLength = strlen(theDevice->theOutputIPCStruct.theMessage) + 1;
-//		theDevice->theOutputIPCStruct.thePriority = 0;
-//		gles2emulator_utils_ipc_send_message (&theDevice->theOutputIPCStruct);
-
 		if (pthread_mutex_init (&theDevice->parametersMutex, NULL)) {
 			DBGPRINT ("    (WARN) : Could not initialise mutex!  Device not installed.\n");
-			gles2emulator_utils_remove_sharedmemory_semaphore (&theDevice->theSharedMemoryStruct);
 			gles2emulator_utils_unmap_sharedmemory (&theDevice->theSharedMemoryStruct);
 			gles2emulator_utils_close_sharedmemory_file (&theDevice->theSharedMemoryStruct);
 			return;
