@@ -28,18 +28,20 @@
 #include <signal.h>
 #include <time.h>
 #include <math.h>
-#include <pthread.h>
 #include "gles2_emulator_constants.h"
 
+#ifdef WIN32
+#include <winsock.h>
+#else
 #include <sys/types.h>
 #include <sys/socket.h>
 #include <sys/un.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
+#endif
 #include <string.h>
 #include <stdlib.h>
 #include <stdio.h>
-
-#define ADDRESS     "/tmp/glproxy-socket"  /* addr to connect */
-
 
 //#define DEBUG 1
 
@@ -69,7 +71,6 @@ struct goldfish_virtualDevice_buff {
 /* The device parameters - IRQ status, buffers, etc. */
 struct goldfish_virtualDevice_device_parameters {
 	int signalType, signalValue;
-	pthread_mutex_t	parametersMutex;
     struct goldfish_device dev;
     uint32_t	int_status;
     uint32_t	int_enable;
@@ -92,7 +93,7 @@ struct goldfish_virtualDevice_device_parameters {
 
 	int			socketfd;
 	int 		connected;
-    struct sockaddr_un saun, fsaun;
+    struct sockaddr_in saun;
 };
 
 void goldfish_virtualDevice_createSocket(struct goldfish_virtualDevice_device_parameters* params)
@@ -108,7 +109,7 @@ void goldfish_virtualDevice_createSocket(struct goldfish_virtualDevice_device_pa
      * stream socket.
      */
 	DBGPRINT("create socket start\n");	
-    if ((params->socketfd = socket(AF_UNIX, SOCK_STREAM, 0)) < 0) {
+    if ((params->socketfd = socket(AF_INET, SOCK_STREAM, 0)) < 0) {
 		return;
     }
 
@@ -116,13 +117,15 @@ void goldfish_virtualDevice_createSocket(struct goldfish_virtualDevice_device_pa
     /*
      * Create the address we will be binding to.
      */
-    params->saun.sun_family = AF_UNIX;
-    strcpy(params->saun.sun_path, ADDRESS);
+    params->saun.sin_family = AF_INET;
+	params->saun.sin_addr.s_addr = inet_addr("127.0.0.1");
+	params->saun.sin_port = 2222;
+		
 }
 
 int goldfish_virtualDevice_connectSocket(struct goldfish_virtualDevice_device_parameters* params)
 {
-	int len = sizeof(params->saun.sun_family) + strlen(params->saun.sun_path)+1;
+	int len = sizeof(params->saun);
 	int res = params->connected;
 	if (res<0) {
 	    while ((res = connect(params->socketfd, &params->saun, len)==-1) && (errno==EINTR)){}
@@ -141,7 +144,7 @@ int goldfish_virtualDevice_writeSocket(struct goldfish_virtualDevice_device_para
 	char* srcAddress = theBuffer->hostDataAddress;
 	if (params->connected  >= 0) {
 		while (bytesToWrite > 0) {	
-			bytesWritten = write(params->socketfd,srcAddress, bytesToWrite); 
+			bytesWritten = send(params->socketfd,srcAddress, bytesToWrite, 0); 
 			if (bytesWritten == -1) {
 					if (errno == EINTR || errno == EAGAIN) 
 						continue;
@@ -179,7 +182,7 @@ struct goldfish_virtualDevice_device_parameters *deviceParametersGlobal;
 static void
 goldfish_virtualDevice_buff_init (struct goldfish_virtualDevice_buff *theBuffer, uint32_t bufferNumber, uint32_t theBufferOffset, uint32_t theBufferSize, uint8 *theBufferAddress)
 {
-	theBuffer->bufferTag = "BUFx";
+	theBuffer->bufferTag = (int)"BUFx";
 	*(char *)(&theBuffer->bufferTag) = '0' + bufferNumber;		/* Test tag to identify it in memory. */
     theBuffer->bufferSize = theBufferSize;
     theBuffer->bufferOffset = theBufferOffset;
@@ -466,10 +469,10 @@ goldfish_virtualDevice_readcommand_requested (void *opaque, target_phys_addr_t o
 
 		case VIRTUALDEVICE_HOST_COMMAND_REGION_WRITE_DONE:
 			DBGPRINT ("    (more) : Command = VIRTUALDEVICE_HOST_COMMAND_REGION_WRITE_DONE : 0x%x\n", theDevice->region_write_done);
-			bytesRead = read(theDevice->socketfd, &ret, sizeof(uint32_t));
+			bytesRead = recv(theDevice->socketfd,(char*) &ret, sizeof(uint32_t), 0);
 			while (bytesRead== -1 && (errno == EINTR || errno ==EAGAIN)) {
 				usleep(1000);
-				bytesRead = read(theDevice->socketfd, &ret, sizeof(uint32_t));
+				bytesRead = recv(theDevice->socketfd, (char*)&ret, sizeof(uint32_t), 0);
 			}
 			if (bytesRead == -1) {
 				close(theDevice->socketfd);
@@ -626,13 +629,6 @@ goldfish_virtualDevice_init (uint32_t base, int id)
 		goldfish_virtualDevice_buff_init (theDevice->input_buffer_2, 1, 0, 0, 0);
 
 		DBGPRINT ("[INFO (%s)] : Host buffers addr: 0x%x\n", __FUNCTION__, theDevice->output_buffer_1->hostDataAddress);
-
-		if (pthread_mutex_init (&theDevice->parametersMutex, NULL)) {
-			DBGPRINT ("    (WARN) : Could not initialise mutex!  Device not installed.\n");
-			gles2emulator_utils_unmap_sharedmemory (&theDevice->theSharedMemoryStruct);
-			gles2emulator_utils_close_sharedmemory_file (&theDevice->theSharedMemoryStruct);
-			return;
-		}
 
 		goldfish_device_add (&theDevice->dev, goldfish_virtualDevice_readfn, goldfish_virtualDevice_writefn, theDevice);
 

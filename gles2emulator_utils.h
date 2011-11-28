@@ -24,12 +24,7 @@
 
 #include "qemu-common.h"
 #include <stdlib.h>
-#include <sys/mman.h>
-#include <semaphore.h>
 #include <signal.h>
-#include <sys/ipc.h>
-#include <sys/shm.h>
-#include <sys/stat.h>        /* For mode constants */
 #include <fcntl.h>           /* For O_* constants */
 #include <stdio.h>
 #include <time.h>
@@ -43,37 +38,16 @@ struct hostSharedMemoryStruct {
 	int fileDescriptor;
 	size_t size;
 	int sharedMemoryID;
-	key_t sharedMemorySegmentKey;
-	sem_t *semaphore;
+	int sharedMemorySegmentKey;
 	char *sharedMemoryObjectName;
 	char *sharedMemorySemaphoreName;
 	void *requiredAddress;
 	void *actualAddress;
 };
-/*
-struct hostIPCStruct {
-	pthread_mutex_t	IPCMutex;
-	char *theMessageQueueName;
-	int maxMessages;
-	int  theMessageBufferSize;
-	char *theMessageBuffer;
-	long bytes_received;
-	float waitTime;
-	int isBlocking;
-	mode_t theFileMode;
-	char *theMessage;
-	size_t theMessageLength;
-	size_t thePriority;
-	void *theThreadPointer;
-	struct sigaction theSignalAction;
-	struct sigevent theSignalEvent;
-};
-*/
+
 void gles2emulator_utils_create_sharedmemory_file (struct hostSharedMemoryStruct *theSharedMemoryStruct);
 void gles2emulator_utils_close_sharedmemory_file (struct hostSharedMemoryStruct *theSharedMemoryStruct);
 void gles2emulator_utils_map_sharedmemory_file (struct hostSharedMemoryStruct *theSharedMemoryStruct);
 void gles2emulator_utils_unmap_sharedmemory (struct hostSharedMemoryStruct *theSharedMemoryStruct);
-void gles2emulator_utils_create_sharedmemory_semaphore (struct hostSharedMemoryStruct *theSharedMemoryStruct);
-void gles2emulator_utils_remove_sharedmemory_semaphore (struct hostSharedMemoryStruct *theSharedMemoryStruct);
 void gles2emulator_utils_create_sharedmemory_segment (struct hostSharedMemoryStruct *theSharedMemoryStruct);
 #endif

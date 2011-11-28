@@ -642,7 +642,6 @@ CORE_MISC_SOURCES = vl-android.c \
                     android/avd/hw-config.c \
                     android/avd/info.c \
                     android/utils/ini.c \
-		    gles2emulator_utils.c \
 
 ifeq ($(HOST_ARCH),x86)
     CORE_MISC_SOURCES += i386-dis.c
@@ -664,6 +663,14 @@ endif
 ifeq ($(HOST_OS),windows)
   CORE_MISC_SOURCES   += tap-win32.c
 endif
+
+
+ifeq ($(HOST_OS),windows)
+	CORE_MISC_SOURCES += gles2emulator_utils_win32.c
+else
+	CORE_MISC_SOURCES += gles2emulator_utils_unix.c
+endif
+
 
 # sources inherited from upstream, but not fully
 # integrated into android emulator

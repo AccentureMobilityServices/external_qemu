@@ -24,7 +24,13 @@
 #include "qemu_debug.h"
 #include "android/globals.h"
 #include "qemu_debug.h"
-
+#include <sys/ipc.h>
+#include <sys/shm.h>
+#include <sys/stat.h>        /* For mode constants */
+#include <sys/mman.h>
+#include <sys/stat.h>        /* For mode constants */
+#include <fcntl.h>           /* For O_* constants */
+ 
 
 //#define DEBUG 1
 
@@ -121,76 +127,4 @@ gles2emulator_utils_unmap_sharedmemory (struct hostSharedMemoryStruct *theShared
 
 	DBGPRINT ("    (more) : Successfully munmap'ed region.\n");
 }
-
-
-/* Create a shared semaphore. */
-void
-gles2emulator_utils_create_sharedmemory_semaphore (struct hostSharedMemoryStruct *theSharedMemoryStruct)
-{
-
-	DBGPRINT ("[INFO (%s)] : Create semaphore descriptor '%s'\n", __FUNCTION__, theSharedMemoryStruct->sharedMemorySemaphoreName);
-
-	theSharedMemoryStruct->semaphore = sem_open (theSharedMemoryStruct->sharedMemorySemaphoreName, O_CREAT, 0666, 0);
-	if (theSharedMemoryStruct->semaphore == SEM_FAILED) {
-		DBGPRINT ("    (ERROR) : Failed to open semaphore.\n");
-		sem_unlink (theSharedMemoryStruct->sharedMemorySemaphoreName);
-		theSharedMemoryStruct->actualAddress = 0;
-		return;
-    }
-
-	DBGPRINT ("    (more) : Created semaphore id: 0x%x.\n", theSharedMemoryStruct->semaphore);
-}
-
-
-/* Close and unlink a shared semaphore. */
-void
-gles2emulator_utils_remove_sharedmemory_semaphore (struct hostSharedMemoryStruct *theSharedMemoryStruct)
-{
-
-	DBGPRINT ("[INFO (%s)] : Closing semaphore descriptor '%s'\n", __FUNCTION__, theSharedMemoryStruct->sharedMemorySemaphoreName);
-
-	sem_unlink (theSharedMemoryStruct->sharedMemorySemaphoreName);
-
-	if (sem_close (theSharedMemoryStruct->semaphore)) {
-		DBGPRINT ("    (ERROR) : Failed to close semaphore.\n");
-		return;
-    }
-	if (sem_unlink (theSharedMemoryStruct->sharedMemorySemaphoreName)) {
-		DBGPRINT ("    (ERROR) : Failed to unlink semaphore.\n");
-		return;
-	}
-
-	DBGPRINT ("    (more) : Succesfully closed and unlinked semaphore.\n");
-}
-
-
-/* Create and allocate a shared memory segment. */
-void
-gles2emulator_utils_create_sharedmemory_segment (struct hostSharedMemoryStruct *theSharedMemoryStruct)
-{
-
-	DBGPRINT ("[INFO (%s)] : Creating shared memory segment key: 0x%x\n", __FUNCTION__, theSharedMemoryStruct->sharedMemorySegmentKey);
-
-	theSharedMemoryStruct->sharedMemoryID = shmget (theSharedMemoryStruct->sharedMemorySegmentKey, theSharedMemoryStruct->size, IPC_CREAT | 0666);
-	if(theSharedMemoryStruct->sharedMemoryID < 0) {
-		DBGPRINT ("    (ERROR) : Failed to create shared memory segment.\n");
-		theSharedMemoryStruct->actualAddress = 0;
-		return;
-    	}
-
-	theSharedMemoryStruct->actualAddress = shmat (theSharedMemoryStruct->sharedMemoryID, NULL, 0);
-
-	if ((int)theSharedMemoryStruct->actualAddress != -1) {
-		DBGPRINT ("    (more) : Successfully created shared memory segment of size %d with key: 0x%x at address 0x%x.\n", theSharedMemoryStruct->size, theSharedMemoryStruct->sharedMemorySegmentKey, theSharedMemoryStruct->actualAddress);
-	} else {
-		DBGPRINT ("    (ERROR) : Could not attach process memory to segment key, error: %s.\n", strerror ((int)theSharedMemoryStruct->actualAddress));
-		theSharedMemoryStruct->actualAddress = 0;
-		return;
-	}
-
-
-	/* Test */
-//	sprintf (theSharedMemoryStruct->actualAddress, "DEADBEEFDEADBEEFDEADBEEF\n");
-}
-
 

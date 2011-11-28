@@ -63,6 +63,9 @@
 #include <errno.h>
 #include <sys/time.h>
 #include <zlib.h>
+#ifndef WIN32
+#include <dlfcn.h>
+#endif
 
 /* Needed early for CONFIG_BSD etc. */
 #include "config-host.h"
@@ -3742,7 +3745,38 @@ static int cpu_can_run(CPUState *env)
         return 0;
     return 1;
 }
+#ifdef WIN32
+void startGLProxy() {
+  	PROCESS_INFORMATION pi;
+	STARTUPINFO si;
 
+	// Set up the start up info struct.
+	ZeroMemory(&si,sizeof(STARTUPINFO));
+	si.cb = sizeof(STARTUPINFO);
+	si.dwFlags = STARTF_USESHOWWINDOW;
+	si.wShowWindow = SW_HIDE;
+	if (!CreateProcess(NULL,"glproxy.exe",NULL,NULL,TRUE,
+				CREATE_NEW_CONSOLE,NULL,NULL,&si,&pi)) {
+        printf("could not load glproxy.exe\n"); 
+	}
+
+}
+#else
+void startGLProxy() {
+	pid_t childpid = fork();
+	if (childpid ==0) {
+		printf("glproxy");
+		char *newargv[] = { "glproxy", NULL };
+        int ret = execvp("glproxy", newargv);
+		if (ret == -1) {
+			perror("execvp");
+			_exit(2);
+		}
+	} else {
+		printf("fork returned pid %d\n", childpid);
+	}
+}
+#endif
 #ifndef CONFIG_IOTHREAD
 static int qemu_init_main_loop(void)
 {
@@ -3827,6 +3861,7 @@ static int qemu_init_main_loop(void)
     ret = qemu_event_init();
     if (ret)
         return ret;
+
 
     qemu_cond_init(&qemu_pause_cond);
     qemu_mutex_init(&qemu_fair_mutex);
@@ -5841,6 +5876,9 @@ int main(int argc, char **argv, char **envp)
         fprintf(stderr, "qemu_init_main_loop failed\n");
         exit(1);
     }
+
+	startGLProxy();
+
     linux_boot = (kernel_filename != NULL);
     net_boot = (boot_devices_bitmap >> ('n' - 'a')) & 0xF;
 
